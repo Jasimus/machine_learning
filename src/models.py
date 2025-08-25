@@ -3,52 +3,23 @@ import pickle
 from numpy.lib.stride_tricks import as_strided
 from scipy import signal
 
-class kernel:
-    
-    def __init__(self, n_chan, shape):
-        self.n_chan = n_chan
-        self.shape = shape
-        self.block = np.random.rand(shape, shape)
 
-    def __init__(self, block):
-        self.block = np.array(block)
+class model:
 
-    def conv(self, tensor_in, padding=0, stride=1):
-        h_k, w_k = self.block.shape
-        h, w = tensor_in.shape
-        
-        if (padding!=0):
-            tensor_in = np.pad(tensor_in, pad_width=padding, mode='constant', constant_values=0)
-        
-
-        act_map = np.empty(shape=((h-h_k + 2*padding)//stride + 1, (w-w_k + 2*padding)//stride + 1))
-
-        h_o, w_o = act_map.shape
-
-        for i in range(0, h_o):
-            for j in range(0, w_o):
-                porc = tensor_in[i*stride:i*stride+h_k, j*stride:j*stride+w_k]
-                if porc.shape != self.block.shape:
-                    continue
-
-                act_map[i, j] = np.sum(porc * self.block)
-
-        return act_map
-
-
-class max_pooling:
-    def __init__(self, n_chan, shape):
-        self.n_chan = n_chan
-        self.shape = shape
-
-
-class cnn:
+    """
+    Linear layers
+    Convolutional layers
+    Max-pooling layers
+    Transpose convolutional layers
+    Batch normalization layers
+    """
 
     ## los diccionarios de capas y demás conservan el orden de creación a partir de python 3.7
 
     def __init__(self):
         self.layers = {}
         self.n_conv_layers = 0
+        self.n_deconv_layers = 0
         self.n_lin_layers = 0
         self.n_mpool_layers = 0
         self.cache = {}
@@ -56,11 +27,13 @@ class cnn:
         self.optim = 'sgd'                                              ## por defecto el optimizador es Stochastic Gradient Descent
 
 
+
     def optimizer_SGD(self, momentum=0.9):
         self.optim = 'sgdm'                                             ## es posible cambiar el tipo de optimización a Stochastic Gradient Descent con Momentum
         self.pond = {}
         self.momentum = momentum
-        
+
+
     
     def first_conv_layer(self, input_shape, n_chan, kernel_size, padding=0, stride=1, bias=True):
         self.n_conv_layers += 1
@@ -89,6 +62,7 @@ class cnn:
             self.pond[f'conv{self.n_conv_layers}'] = {'VdW':np.zeros((n_chan, c, kernel_size, kernel_size)), 'Vdb': np.zeros(n_chan,)}          ## Si el optimizador es SGDM, inicio sus vectores de ponderación
     
 
+
     def conv_layer(self, n_chan, kernel_size, padding=0, stride=1, bias=True):
         self.n_conv_layers += 1
 
@@ -99,7 +73,6 @@ class cnn:
         std = np.sqrt(2 / fan_in)
         kernel_list = np.random.randn(n_chan, c, kernel_size, kernel_size) * std
 
-        self.layers[f'conv{self.n_conv_layers}'] = {'kernel_list':kernel_list, 'output':(n_chan, h-kernel_size + 2*padding + 1, w-kernel_size + 2*padding + 1)}
         b = np.zeros((n_chan,))
 
         params = {'input': (c,h,w),
@@ -130,6 +103,7 @@ class cnn:
 
         if self.optim == 'sgdm':
             self.pond[f'conv{self.n_conv_layers}'] = {'VdW':np.zeros((n_neurons, n_in)), 'Vdb': np.zeros(n_neurons,1)}
+
 
 
     def lin_layer(self, n_neurons, activ='relu'):
@@ -163,6 +137,84 @@ class cnn:
             self.pond[f'conv{self.n_conv_layers}'] = {'VdW':np.zeros((n_neurons, n_in)), 'Vdb': np.zeros(n_neurons,1)}
 
     
+
+    def first_deconv_layer(self, input_shape, n_chan, kernel_size, padding=0, stride=1, bias=True):
+        self.n_deconv_layers += 1
+        
+
+        c, h, w = input_shape
+        
+        fan_in = c * kernel_size * kernel_size
+        std = np.sqrt(2 / fan_in)
+        kernel_list = np.random.randn(n_chan, c, kernel_size, kernel_size) * std
+
+        b = np.zeros((n_chan,))
+
+        h_out = h + (stride-1)*(h-1) + 2*(kernel_size-1-padding)
+        w_out = w + (stride-1)*(w-1) + 2*(kernel_size-1-padding)
+
+        params = {'input': (c,h,w),
+                  'kernel_list':kernel_list,
+                  'output':(n_chan, h_out, w_out),
+                  'stride':stride,
+                  'padding':padding
+                  }
+
+        if bias:
+            params['bias'] = b
+
+        self.layers[f'deconv{self.n_conv_layers}'] = params
+
+        if self.optim == 'sgdm':
+            self.pond[f'deconv{self.n_conv_layers}'] = {'VdW':np.zeros((n_chan, c, kernel_size, kernel_size)), 'Vdb': np.zeros(n_chan,)}
+
+
+
+    def deconv_layer(self, n_chan, kernel_size, padding=0, stride=1, bias=True):                ## si hay n capas convolucionales, i-ésima deconv_layer --> (input) = (n+1)-i-ésima conv_layer --> (output)
+        self.n_deconv_layers += 1
+        
+        try:
+            last_key = list(self.layers.keys())[-1]
+
+            if (np.strings.startswith(last_key, 'lin') and not np.string.startwith(last_key, 'lino')):
+                try:
+                    c, h, w = self.layers[f'conv{self.n_conv_layers+1-self.n_deconv_layers}']['output']
+                
+                except KeyError:
+                    print('no se puede agregar una capa deconvolucional después de una capa lineal sin capas convolucionales anteriores')
+
+            else:
+                c, h, w = self.layers[last_key]['output']
+
+        except IndexError:
+            print('para agregar una capa deconvolucional como primera capa utiliza "first_deconv_layer"')
+
+        
+        fan_in = c * kernel_size * kernel_size
+        std = np.sqrt(2 / fan_in)
+        kernel_list = np.random.randn(n_chan, c, kernel_size, kernel_size) * std
+
+        b = np.zeros((n_chan,))
+
+        h_out = h + (stride-1)*(h-1) + 2*(kernel_size-1-padding)
+        w_out = w + (stride-1)*(w-1) + 2*(kernel_size-1-padding)
+
+        params = {'input': (c,h,w),
+                  'kernel_list':kernel_list,
+                  'output':(n_chan, h_out, w_out),
+                  'stride':stride,
+                  'padding':padding
+                  }
+
+        if bias:
+            params['bias'] = b
+
+        self.layers[f'deconv{self.n_conv_layers}'] = params
+
+        if self.optim == 'sgdm':
+            self.pond[f'deconv{self.n_conv_layers}'] = {'VdW':np.zeros((n_chan, c, kernel_size, kernel_size)), 'Vdb': np.zeros(n_chan,)}
+
+
 
     def maxpooling_layer(self, kernel_size=2, stride=2):
         self.n_mpool_layers += 1
@@ -221,6 +273,12 @@ class cnn:
                 print('\tW shape:', layer['W'].shape)
                 print('\tactivation:', layer['activation'])
 
+            elif (np.strings.startswith(tipo, 'deconv')):
+                print('\ttipo:', tipo)
+                print('\tinput shape:', layer['input'])
+                print('\tkernel list shape:', layer['kernel_list'].shape)
+                print('\toutput shape:', layer['output'])
+
             else:
                 print('\ttipo:', tipo)
                 print('\tinput shape:', layer['input'])
@@ -260,25 +318,32 @@ class cnn:
         out = out.transpose(0,3,1,2)
 
         return out
-    
 
-    def conv2d_backward_weights(self, x, dout, kernel_shape, padding=0, stride=1):
-        batch, _, _, _ = x.shape
-        _, _, h_o, w_o = dout.shape
 
-        _, c_in, h_k, w_k = kernel_shape
 
-        if padding != 0:
-            x = np.pad(x, ((0,0),(0,0),(padding,padding),(padding,padding)), mode='constant')
+    def deconv_batch(self, x, kernel_list, output_shape, padding=0, stride=1):
+        batch, c_in, h_in, w_in = x.shape
+        c_out, h_out, w_out = output_shape
 
-        shape = (batch, c_in, h_o, w_o, h_k, w_k)
-        strides = (x.strides[0], x.strides[1], stride*x.strides[2], stride*x.strides[3], x.strides[2], x.strides[3])
-        windows = as_strided(x, shape=shape, strides=strides)
+        out = np.zeros((batch, c_out, h_out, w_out))
 
-        out = np.tensordot(windows, dout, axes=([0,2,3],[0,2,3]))
-        out = out.transpose(3,0,1,2)   # (c_out, c_in, h_k, w_k)
+        for b in range(batch):
+            for cin in range(c_in):
+                # "upsample" x insertando ceros según stride
+                upsampled = np.zeros((h_in*stride, w_in*stride))
+                upsampled[::stride, ::stride] = x[b, cin]
+                for cout in range(c_out):
+
+                    k_rot = np.rot90(kernel_list[cout, cin], 2)
+                    # correlación con kernel
+                    out[b, cout] += signal.correlate2d(
+                        upsampled,
+                        k_rot,  # ojo: eje correcto
+                        mode="full"
+                    )[padding:padding+h_out, padding:padding+w_out]
 
         return out
+
 
 
     def maxpooling_batch(self, x, kernel_size=2, stride=2):
@@ -325,6 +390,27 @@ class cnn:
         return dx
 
 
+
+    def conv2d_backward_weights(self, x, dout, kernel_shape, padding=0, stride=1):
+        batch, _, _, _ = x.shape
+        _, _, h_o, w_o = dout.shape
+
+        _, c_in, h_k, w_k = kernel_shape
+
+        if padding != 0:
+            x = np.pad(x, ((0,0),(0,0),(padding,padding),(padding,padding)), mode='constant')
+
+        shape = (batch, c_in, h_o, w_o, h_k, w_k)
+        strides = (x.strides[0], x.strides[1], stride*x.strides[2], stride*x.strides[3], x.strides[2], x.strides[3])
+        windows = as_strided(x, shape=shape, strides=strides)
+
+        out = np.tensordot(windows, dout, axes=([0,2,3],[0,2,3]))
+        out = out.transpose(3,0,1,2)   # (c_out, c_in, h_k, w_k)
+
+        return out
+
+
+
     def conv2d_backward_input(self, dout, kernel, padding=0, stride=1):
         # dout: (B, C_out, H_out, W_out)
         # kernel: (C_out, C_in, K_h, K_w)
@@ -364,6 +450,60 @@ class cnn:
         return dX
 
 
+
+    def deconv2d_backward_weights(self, dout, x, kernel_shape, padding=0, stride=1):                ## padding = padding utilizado en la respectiva capa
+        ## dout : (batch, c_out, h_out, w_out)
+
+        if padding != 0:
+            dout = np.pad(dout, ((0,0),(0,0),(padding,padding),(padding,padding)), mode='constant')
+
+        _, c_out, h_out, w_out = dout.shape
+        batch, c_in, h_in, w_in = x.shape
+
+        _, _, h_k, w_k = kernel_shape
+
+        h_mod = (stride-1)*(h_in-1) + h_in
+        w_mod = (stride-1)*(w_in-1) + w_in
+
+        ups = np.zeros((batch, c_in, h_mod, w_mod), dtype=x.dtype)
+        ups[:, :, ::stride, ::stride] = x
+
+        shape = (batch, c_out, h_k, w_k, h_mod, w_mod)
+        strides = (dout.strides[0], dout.strides[1], stride*dout.strides[2], stride*dout.strides[3], dout.strides[2], dout.strides[3])
+        windows = as_strided(dout, shape=shape, strides=strides)
+
+        out = np.tensordot(windows, ups, axes=([0,4,5],[0,2,3]))
+        out = out.transpose(0,3,1,2)   # (c_out, c_in, h_k, w_k)
+
+        return out
+
+
+
+    def deconv2d_backward_input(self, dout, kernel, input_shape, padding=0, stride=1):
+        c_in, h_in, w_in = input_shape
+        batch, c_out, h_out, w_out = dout.shape
+
+        if padding != 0:
+            dout = np.pad(dout, ((0,0),(0,0),(padding,padding),(padding,padding)), mode='constant')
+
+        out = np.zeros((batch, c_in, h_in, w_in))
+
+        for b in range(batch):
+            for cout in range(c_out):
+                for cin in range(c_in):
+                    k_rot = np.rot90(kernel[cout, cin], 2)
+
+                    out[b, cin] += signal.correlate2d(
+                        dout[b, cout],
+                        k_rot,
+                        mode="full")
+
+        out = out[:, :, ::stride, ::stride]
+
+        return out
+
+
+
     def forward_pass(self, x):
         for tipo, layer in self.layers.items():
             if tipo[0] == 'c':
@@ -373,7 +513,6 @@ class cnn:
                 x = self.relu(t_out)
 
                 self.cache[f'{tipo}_out'] = t_out
-                self.cache[f'{tipo}_relu'] = x
 
             elif tipo[0] == 'm':
                 self.cache[f'{tipo}_in'] = x
@@ -403,6 +542,14 @@ class cnn:
 
                 else:
                     raise ValueError(f"La función de activación {layer['activation']} no es válida para la capa {tipo}")
+                
+
+            elif np.strings.startswith(tipo, 'deconv'):
+                self.cache[f'{tipo}_in'] = x
+                t_out = self.deconv_batch(x, layer['kernel_list'], layer['output'], layer['padding'], layer['stride']) + layer['bias'][None,:, None, None]
+
+                self.cache[f'{tipo}_out'] = t_out
+                x = self.relu(t_out)
 
             else:
                 raise ValueError("error inesperado")
@@ -455,6 +602,23 @@ class cnn:
                     dout = self.layers[capas[tipo]]['W'].T.dot(dout)
                     dout = dout.reshape(self.cache[f'{prev_name}_out'].shape)
 
+            elif np.strings.startswith(capas[tipo], 'deconv'):
+                layer = self.layers[capas[tipo]]
+                dout = self.d_relu(self.cache[f'{capas[tipo]}_out']) * dout
+
+                self.grads[capas[tipo]] = {'dW': 1/p * self.deconv2d_backward_weights(dout, self.cache[f'{capas[tipo]}_in'], layer['kernel_list'].shape, layer['padding'], layer['stride']),
+                                           'db': 1/p * np.sum(dout, axis=(0, 2, 3), keepdims=True)}
+                
+
+                dout = self.deconv2d_backward_input(dout, layer['kernel_list'], layer['input'], layer['padding'], layer['stride'])
+
+                if np.strings.startswith(capas[tipo-1], 'lin'):
+                    dout = dout.reshape(self.layers[capas[tipo-1]]['output'])
+
+                if self.optim == 'sgdm':
+                    self.pond[capas[tipo]]['VdW'] = self.momentum*self.pond[capas[tipo]]['VdW'] + (1-self.momentum)*self.grads[capas[tipo]]['dW']
+                    self.pond[capas[tipo]]['Vdb'] = self.momentum*self.pond[capas[tipo]]['Vdb'] + (1-self.momentum)*self.grads[capas[tipo]]['db']
+            
             else:
                 if self.layers[f'{capas[tipo]}']['activation'] == 'softmax':
                     n_classes = self.layers[name]['output'][0]
@@ -483,6 +647,10 @@ class cnn:
                     self.layers[tipo]['W'] = self.layers[tipo]['W'] - self.grads[tipo]['dW']*mu
                     self.layers[tipo]['b'] = self.layers[tipo]['b'] - self.grads[tipo]['db']*mu
 
+                if tipo[0] == 'd':
+                    self.layers[tipo]['kernel_list'] = self.layers[tipo]['kernel_list'] - self.grad[tipo]['dW']*mu
+                    self.layers[tipo]['bias'] = self.layers[tipo]['b'] - self.grads[tipo]['db']*mu
+
         elif self.optim == 'sgdm':
             for tipo in self.layers.keys():
                 if tipo[0] == 'c':
@@ -492,6 +660,10 @@ class cnn:
                 if tipo[0] == 'l':
                     self.layers[tipo]['W'] = self.layers[tipo]['W'] - mu*self.pond[tipo]['VdW']
                     self.layers[tipo]['b'] = self.layers[tipo]['b'] - mu*self.pond[tipo]['Vdb']
+
+                if tipo[0] == 'd':
+                    self.layers[tipo]['kernel_list'] = self.layers[tipo]['kernel_list'] - mu*self.pond[tipo]['VdW']
+                    self.layers[tipo]['bias'] = self.layers[tipo]['bias'] - mu*np.squeeze(self.pond[tipo]['Vdb'])
 
 
     def learning(self, epoch, batch_size, learning_rate, x, Y, n_doc=10):
@@ -533,8 +705,3 @@ class cnn:
     def load_params(self, src):
         with open(f'{src}.pkl', 'rb') as f:
             self.layers_loaded = pickle.load(f)
-
-
-
-
-
